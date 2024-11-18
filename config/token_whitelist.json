@@ -1,0 +1,47 @@
+{
+    "tokens": {
+        "SOL": {
+            "address": "So11111111111111111111111111111111111111112",
+            "symbol": "SOL",
+            "name": "Solana",
+            "decimals": 9,
+            "min_liquidity": 1000000,
+            "enabled": true
+        },
+        "USDC": {
+            "address": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+            "symbol": "USDC",
+            "name": "USD Coin",
+            "decimals": 6,
+            "min_liquidity": 500000,
+            "enabled": true
+        }
+    },
+    "pairs": {
+        "SOL/USDC": {
+            "dexes": {
+                "raydium": {
+                    "pool_address": "58oQChx4yWmvKdwLLZzBi4ChoCc2fqCUWBkwMihLYQo2",
+                    "enabled": true
+                },
+                "orca": {
+                    "pool_address": "EGZ7tiLeH62TPV1gL8WwbXGzEPa9zmcpVnnkPKKnrE2U",
+                    "enabled": true
+                }
+            },
+            "min_trade_size": 10,
+            "max_trade_size": 1000,
+            "enabled": true
+        }
+    },
+    "dexes": {
+        "raydium": {
+            "name": "Raydium",
+            "enabled": true
+        },
+        "orca": {
+            "name": "Orca",
+            "enabled": true
+        }
+    }
+}
