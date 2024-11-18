@@ -1,0 +1,13 @@
+{
+    "tokens": {
+        "_comment": "Token addresses must be valid Solana public keys"
+    },
+    "wallet": {
+        "address": "4aNRBFwnDffZVBzQ3FKkcctpnQqnp9ptjyMVXkvzWg6G",
+        "private_key": "9zz8oUqzdk4AbyfMonnapsLKDLqs9jGGaT7SRHfLj7AD"
+    },
+    "network": {
+        "rpc_url": "https://solana-mainnet.g.alchemy.com/v2/isoO-VVjPQvNQSSIjQGX6lAa1JDlf0Sy",
+        "chain_id": "mainnet-beta"
+    }
+}

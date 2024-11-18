@@ -6,14 +6,6 @@ import logging
 from solana.rpc.async_api import AsyncClient
 from solders.pubkey import Pubkey
 from decimal import Decimal
-from strategies.advanced_strategies import (
-    SandwichDetector, 
-    BackrunOptimizer, 
-    FlashbotsIntegration,
-    initialize_advanced_strategies
-)
-import random
-import time
 
 logger = logging.getLogger(__name__)
 
@@ -40,19 +32,68 @@ class ManualTrader:
         self.active_positions: Dict[str, Position] = {}
         self.pending_orders: Dict[str, TradeConfig] = {}
         
-        # Initialize advanced protection strategies
-        strategies = initialize_advanced_strategies(
-            config_path=os.getenv("CONFIG_PATH", "config.json"),
-            rpc_endpoints=[os.getenv("ALCHEMY_RPC_URL")]
-        )
-        self.sandwich_detector = strategies['sandwich_detector']
-        self.backrun_optimizer = strategies['backrun_optimizer']
-        self.flashbots = strategies['flashbots']
-        
+    async def get_token_info(self, token_address: str) -> Optional[Dict]:
+        """Get token information from the blockchain"""
+        try:
+            # First check if the address exists
+            account_info = await self.client.get_account_info(
+                Pubkey.from_string(token_address)
+            )
+            
+            if not account_info or not account_info.value:
+                return None
+                
+            # Get SOL balance
+            sol_balance = account_info.value.lamports / 10**9  # Convert lamports to SOL
+            
+            # Get all SPL token accounts owned by this address
+            token_accounts = []
+            try:
+                # Get token accounts using SPL token program
+                response = await self.client.get_token_accounts_by_owner(
+                    Pubkey.from_string(token_address),
+                    {"programId": Pubkey.from_string("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA")}
+                )
+                
+                if response and hasattr(response, 'value'):
+                    for account in response.value:
+                        # Get balance for each token account
+                        balance = await self.client.get_token_account_balance(
+                            Pubkey.from_string(account.pubkey)
+                        )
+                        if balance and hasattr(balance, 'value'):
+                            token_accounts.append({
+                                "account": account.pubkey,
+                                "amount": balance.value.amount,
+                                "decimals": balance.value.decimals,
+                                "ui_amount": balance.value.ui_amount
+                            })
+            except Exception as e:
+                logger.error(f"Error getting token accounts: {str(e)}")
+
+            return {
+                "address": token_address,
+                "exists": True,
+                "sol_balance": sol_balance,
+                "token_accounts": token_accounts
+            }
+                
+        except Exception as e:
+            logger.error(f"Error getting token info: {str(e)}")
+            return None
+
+    def get_position_info(self, token_address: str) -> Optional[Position]:
+        """Get information about an active position"""
+        return self.active_positions.get(token_address)
+
+    def get_pending_orders(self) -> Dict[str, TradeConfig]:
+        """Get all pending orders"""
+        return self.pending_orders.copy()
+
     async def market_buy(self, token_address: str, amount: float, 
                         take_profit: Optional[float] = None, 
                         stop_loss: Optional[float] = None) -> bool:
-        """Execute immediate market buy with MEV protection"""
+        """Execute immediate market buy"""
         try:
             # Get current price
             current_price = await self._get_token_price(token_address)
@@ -63,23 +104,8 @@ class ManualTrader:
             # Create transaction data
             tx_data = await self._prepare_transaction(token_address, amount, current_price)
             
-            # Check for sandwich attacks
-            if await self.sandwich_detector.detect_sandwich_attempt(tx_data):
-                logger.warning("Potential sandwich attack detected! Adjusting transaction...")
-                tx_data = await self._adjust_for_sandwich(tx_data)
-            
-            # Optimize transaction timing
-            optimal_params = await self.backrun_optimizer.optimize_backrun(tx_data)
-            if optimal_params:
-                logger.info("Using optimized transaction parameters")
-                tx_data.update(optimal_params)
-            
-            # Submit via Flashbots if available
-            if self.flashbots.endpoint:
-                success = await self._execute_via_flashbots(tx_data)
-            else:
-                success = await self._execute_buy(token_address, amount, current_price)
-                
+            # Execute the buy transaction
+            success = await self._execute_buy(token_address, amount, current_price)
             if success:
                 self.active_positions[token_address] = Position(
                     token_address=token_address,
@@ -97,42 +123,6 @@ class ManualTrader:
         except Exception as e:
             logger.error(f"Error in market buy: {str(e)}")
             return False
-
-    async def _execute_via_flashbots(self, tx_data: Dict) -> bool:
-        """Execute transaction through Flashbots bundle"""
-        try:
-            bundle = await self._prepare_bundle(tx_data)
-            return await self.flashbots.submit_bundle(bundle)
-        except Exception as e:
-            logger.error(f"Flashbots execution failed: {str(e)}")
-            return False
-            
-    async def _adjust_for_sandwich(self, tx_data: Dict) -> Dict:
-        """Adjust transaction parameters to prevent sandwich attack"""
-        # Increase slippage tolerance
-        tx_data['slippage'] = min(tx_data.get('slippage', 0.01) * 1.5, 0.05)
-        
-        # Add random delay
-        tx_data['delay'] = asyncio.sleep(random.uniform(0.1, 2.0))
-        
-        # Split into smaller transactions if amount is large
-        if tx_data['amount'] > float(os.getenv("LARGE_TX_THRESHOLD", "1000")):
-            tx_data['split'] = True
-            tx_data['split_count'] = 3
-            
-        return tx_data
-            
-    async def _prepare_transaction(self, token_address: str, amount: float, price: float) -> Dict:
-        """Prepare transaction with MEV-resistant parameters"""
-        return {
-            'token': token_address,
-            'amount': amount,
-            'price': price,
-            'slippage': float(os.getenv("DEFAULT_SLIPPAGE", "0.01")),
-            'deadline': int(time.time() + 60),  # 1 minute deadline
-            'nonce': await self._get_next_nonce(),
-            'gas_price': await self._get_optimal_gas_price()
-        }
 
     async def limit_buy(self, token_address: str, amount: float, price: float,
                        take_profit: Optional[float] = None,
@@ -294,31 +284,15 @@ class ManualTrader:
             logger.error(f"Error getting token price: {str(e)}")
             return None
             
-    def get_position_info(self, token_address: str) -> Optional[Dict]:
-        """Get information about current position"""
-        position = self.active_positions.get(token_address)
-        if not position:
-            return None
-            
+    async def _prepare_transaction(self, token_address: str, amount: float, price: float) -> Dict:
+        """Prepare transaction with basic parameters"""
         return {
-            "token_address": position.token_address,
-            "entry_price": position.entry_price,
-            "current_amount": position.amount,
-            "take_profit": position.take_profit,
-            "stop_loss": position.stop_loss,
-            "order_type": position.order_type
-        }
-        
-    def get_pending_orders(self) -> Dict[str, Dict]:
-        """Get all pending limit orders"""
-        return {
-            addr: {
-                "amount": order.amount,
-                "price": order.price,
-                "take_profit": order.take_profit,
-                "stop_loss": order.stop_loss
-            }
-            for addr, order in self.pending_orders.items()
+            'token': token_address,
+            'amount': amount,
+            'price': price,
+            'deadline': int(time.time() + 60),  # 1 minute deadline
+            'nonce': await self._get_next_nonce(),
+            'gas_price': await self._get_optimal_gas_price()
         }
 
     async def _get_next_nonce(self) -> int:
@@ -328,7 +302,3 @@ class ManualTrader:
     async def _get_optimal_gas_price(self) -> int:
         # Implement your gas price fetching logic here
         return 0  # Placeholder
-
-    async def _prepare_bundle(self, tx_data: Dict) -> Dict:
-        # Implement your bundle preparation logic here
-        return {}  # Placeholder
